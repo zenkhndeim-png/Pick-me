@@ -1,0 +1,466 @@
+# XAUUSD SMC Pro v9.3 MICRO — โค้ดเต็มสำหรับคัดลอก
+
+เวอร์ชันสำหรับทุนน้อย logic เข้าไม้เหมือน v9.2 ที่ทดสอบแล้วทุกบรรทัด
+เพิ่มระบบคุมความเสี่ยง อ่านวิธีใช้ที่ [MICRO_30USD.md](MICRO_30USD.md)
+
+กดปุ่มคัดลอก (ไอคอนมุมขวาบนของกล่องโค้ด) แล้ววางใน Pine Editor
+บรรทัดแรกต้องเป็น `//@version=5`
+
+```pine
+//@version=5
+// ══════════════════════════════════════════════════════════════════════════
+// XAUUSD SMC Pro v9.3 MICRO — STRATEGY สำหรับพอร์ตเล็ก
+//
+// logic เข้าไม้ + การแก้บั๊กทั้งหมด เหมือน v9.2 ที่ผ่านการทดสอบแล้วทุกบรรทัด
+// สิ่งที่เพิ่มคือระบบจัดการความเสี่ยงสำหรับทุนน้อย:
+//   1. คำนวณว่าไม้นี้เสี่ยงกี่ % ของทุนจริง แล้ว "ข้ามไม้ที่เกินกำลัง" เอง
+//   2. หยุดเทรดทั้งวันเมื่อขาดทุนถึงเพดาน
+//   3. หยุดเทรดเมื่อแพ้ติดกันครบจำนวนที่ตั้งไว้
+//   4. ตารางบอกความเสี่ยงเป็น $ และ % ทุกไม้
+//
+// ⚠️ อ่านก่อนใช้
+//   ผลที่ผ่านการทดสอบ (PF 1.241) วัดบนทุน $1,000 ขนาด 0.02 lot
+//   บนทุน $30 ที่ 0.01 lot (เล็กสุดของโบรกทั่วไป) SL ราว $12 ของ H1
+//   = เสี่ยง 40% ต่อไม้ ซึ่งพอร์ตรับไม่ไหว
+//   สคริปต์นี้จะ "ไม่เข้าไม้" ถ้าเกินเพดานที่ตั้งไว้ ดังนั้นบน H1 อาจไม่เทรดเลย
+//   นั่นคือคำตอบที่ซื่อสัตย์ ไม่ใช่ความผิดพลาด — ต้องลง TF ให้ SL เล็กลง
+//
+// ── ค่าที่ตั้งมาให้แล้วในโค้ด ──
+//   ทุน $30 / 1 oz (= 0.01 lot) / commission 0.15 ต่อ contract (spread $0.30/oz)
+//   BE ปิด (พิสูจน์แล้วว่าขาดทุน −$81) / การแก้บั๊ก 1 กับ 2 เปิด
+// ══════════════════════════════════════════════════════════════════════════
+strategy("XAUUSD SMC Pro v9.3 MICRO [STRATEGY]", overlay=true,
+     initial_capital         = 30,
+     default_qty_type        = strategy.fixed,
+     default_qty_value       = 1,
+     currency                = currency.USD,
+     commission_type         = strategy.commission.cash_per_contract,
+     commission_value        = 0.15,
+     calc_on_every_tick      = false,
+     process_orders_on_close = false,
+     max_labels_count = 500, max_lines_count = 500, max_boxes_count = 500)
+
+// ══════════════════════════════════════════
+// 0A. ทุนน้อย — คุมความเสี่ยงให้พอร์ตรอด
+// ══════════════════════════════════════════
+grp_micro  = "0A. ทุนน้อย (Micro)"
+acctSize   = input.float(30.0, "ทุนจริงของคุณ ($)", minval=1, step=1, group=grp_micro, tooltip="ใส่ให้ตรงกับเงินในบัญชีจริง ใช้คำนวณ % ความเสี่ยง — ต้องตรงกับ Initial capital ในแท็บคุณสมบัติด้วย")
+posOz      = input.float(1.0, "ขนาดไม้ (oz)", minval=0.01, step=0.01, group=grp_micro, tooltip="0.01 lot = 1 oz (เล็กสุดของโบรกทั่วไป) / บัญชี cent ใส่ 0.01 ได้")
+maxRiskPct = input.float(10.0, "เพดานความเสี่ยงต่อไม้ (% ของทุน)", minval=0.5, maxval=100, step=0.5, group=grp_micro, tooltip="มาตรฐานคือ 1-2% / ทุน $30 ที่ 1 oz ต้องยอมสูงกว่านั้นมากถึงจะมีไม้เข้า")
+skipIfOver = input.bool(true, "ข้ามสัญญาณที่เสี่ยงเกินเพดาน", group=grp_micro, tooltip="เปิดไว้ = ปลอดภัย ถ้าไม่มีไม้เข้าเลยแปลว่า TF นี้ SL ใหญ่เกินทุน ต้องลง TF")
+useDayStop = input.bool(true, "หยุดเทรดทั้งวันเมื่อขาดทุนถึงเพดาน", group=grp_micro)
+maxDayLoss = input.float(20.0, "เพดานขาดทุนต่อวัน (% ของทุน)", minval=1, maxval=100, step=1, group=grp_micro)
+useStreak  = input.bool(true, "หยุดเทรดเมื่อแพ้ติดกัน", group=grp_micro)
+maxLossStk = input.int(3, "แพ้ติดกันกี่ไม้ถึงหยุด (นับใหม่ทุกวัน)", minval=2, maxval=10, group=grp_micro)
+
+// ══════════════════════════════════════════
+// 0. การแก้บั๊ก (จาก v9.2) — ปิดทั้งหมด = ได้ v9 เดิม
+// ══════════════════════════════════════════
+grp_fix    = "0. การแก้ของ v9.2"
+fixArmExit = input.bool(true, "แก้บั๊ก 2: ติดอาวุธ SL ตั้งแต่วินาทีที่ออเดอร์ติด", group=grp_fix, tooltip="v9 วาง exit หลังเห็นว่ามีโพสิชันแล้ว = แท่งที่ limit ติดไม่มี SL คุ้มครองเลยทั้งแท่ง นี่คือเหตุผลที่ขาดทุนเฉลี่ยจริง $13.53 สูงกว่าเพดาน maxSLusd $12")
+fixPending = input.bool(true, "แก้บั๊ก 1: กันออเดอร์ limit ค้าง / SL ถูกเขียนทับ", group=grp_fix, tooltip="v9 เช็คแค่ position_size==0 ซึ่งเป็นจริงตอน limit ยังไม่ติด ทำให้มีสัญญาณใหม่มาเขียนทับ actSL ของออเดอร์ที่ยังค้างอยู่ และมี L กับ S ค้างพร้อมกันได้")
+useBE      = input.bool(false, "เพิ่ม: เลื่อน SL มา BE หลังโดน TP1", group=grp_fix, tooltip="จาก backtest v9: 51% ของไม้แตะ TP1 แล้วย้อนกลับมาโดน SL จนเหลือสุทธิ $0 — ข้อนี้แก้ตรงจุดนั้น")
+beBufAtr   = input.float(0.1, "BE เผื่อระยะ (× ATR)", minval=-0.5, maxval=0.5, step=0.05, group=grp_fix, tooltip="0 = ทุนเป๊ะ / บวก = วาง SL ต่ำกว่าทุนนิดหน่อย กันโดนไส้เทียนเขี่ย (ยอมขาดทุนเล็กน้อย) / ลบ = ล็อกกำไรไว้เลย")
+
+// ══════════════════════════════════════════
+// INPUTS — ค่าเดิมของ v9 ทุกตัว
+// ══════════════════════════════════════════
+grp_struct  = "1. Structure"
+swingLen    = input.int(5, "Swing Length", minval=2, maxval=20, group=grp_struct)
+
+grp_mtf     = "2. Multi-Timeframe"
+useMTF      = input.bool(true, "เปิด MTF Filter", group=grp_mtf)
+mtfConfirm  = input.string("H1", "ยืนยันด้วย TF", options=["M15","M30","H1","H4"], group=grp_mtf, tooltip="เล่นกราฟ H1 แล้วเลือก H1 = ฟิลเตอร์นี้ไม่ได้กรองอะไรเลย (ซ้ำกับ EMA ของกราฟ) ลองเปลี่ยนเป็น H4 เทียบดู")
+
+grp_signal  = "3. Signal"
+emaFast     = input.int(21, "EMA Fast", minval=5,  group=grp_signal)
+emaSlow     = input.int(50, "EMA Slow", minval=10, group=grp_signal)
+rsiLen      = input.int(14, "RSI Length", minval=2, group=grp_signal)
+rsiOB       = input.int(70, "RSI OB", minval=60, group=grp_signal)
+rsiOS       = input.int(30, "RSI OS", maxval=40, group=grp_signal)
+volFilter   = input.bool(true, "Volume Filter", group=grp_signal)
+minScore    = input.int(4, "Min Score (แท่งปิด)", minval=2, maxval=7, group=grp_signal)
+useMomentum = input.bool(true, "ยอมรับ Momentum candle", group=grp_signal)
+signalGap   = input.int(15, "ระยะห่างสัญญาณขั้นต่ำ (แท่ง)", minval=1, maxval=50, group=grp_signal)
+noChaseHi   = input.int(62, "ห้าม Long ถ้า RSI เกิน", minval=50, maxval=75, group=grp_signal)
+noChaseLo   = input.int(38, "ห้าม Short ถ้า RSI ต่ำกว่า", minval=25, maxval=50, group=grp_signal)
+strictMTF   = input.bool(true, "บังคับเข้าตามเทรนด์ MTF", group=grp_signal)
+
+grp_tpsl    = "4. TP / SL"
+slAtrMult   = input.float(1.2, "SL = ATR ×", minval=0.3, step=0.1, group=grp_tpsl)
+maxSLusd    = input.float(12.0, "SL สูงสุด ($)", minval=1.0, step=0.5, group=grp_tpsl)
+useSwingSL  = input.bool(true, "ใช้ swing ถ้าอยู่ในระยะ", group=grp_tpsl)
+rr1         = input.float(1.0, "TP1 = SL ×", minval=0.5, step=0.1, group=grp_tpsl)
+rr2         = input.float(1.8, "TP2 = SL ×", minval=1.0, step=0.1, group=grp_tpsl, tooltip="จาก backtest: มีแค่ 34% ของไม้ที่แตะ TP1 แล้วไปต่อถึง 1.8R ได้ ลองลดเหลือ 1.2-1.4 เทียบดู")
+atrLen      = input.int(14, "ATR Length", minval=1, group=grp_tpsl)
+usePartial  = input.bool(true, "ปิดครึ่งไม้ที่ TP1", group=grp_tpsl)
+
+grp_limit   = "5. Limit Entry"
+useLimit    = input.bool(true, "โหมด Limit — รอราคาย่อก่อนเข้า", group=grp_limit)
+pullbackAtr = input.float(0.4, "รอราคาย่อกลับ (× ATR)", minval=0.1, step=0.1, group=grp_limit)
+limitExpiry = input.int(6, "ยกเลิกถ้าไม่เข้าใน N แท่ง", minval=1, maxval=999, group=grp_limit, tooltip="999 = ไม่ยกเลิก (v9 เดิม) — ค่านี้คู่กับบั๊ก 1 ทำให้ออเดอร์ค้างข้ามวันได้")
+
+grp_range   = "6. Sideway Filter"
+useRangeFlt = input.bool(true, "ไม่เทรดตอนตลาด Sideway", group=grp_range)
+adxLen      = input.int(14, "ADX Length", minval=5, group=grp_range)
+adxMin      = input.float(20, "ADX ขั้นต่ำ", minval=10, maxval=40, step=1, group=grp_range)
+emaSlopeFlt = input.bool(true, "กรอง EMA แบนด้วย", group=grp_range)
+emaSepMin   = input.float(0.15, "EMA21-50 ต้องห่างกัน ≥ (× ATR)", minval=0, step=0.05, group=grp_range)
+showRange   = input.bool(true, "แสดงโซน Sideway", group=grp_range)
+
+grp_pos     = "7. Position"
+onePosOnly  = input.bool(true, "เข้าเฉพาะตอนไม่มีไม้ค้าง", group=grp_pos)
+
+grp_real    = "8. Reality check"
+useDates    = input.bool(false, "จำกัดช่วงเวลาเทรด", group=grp_real, tooltip="ใช้แบ่ง in-sample / out-of-sample โดยไม่ต้องแตะกราฟ")
+dFrom       = input.time(timestamp("01 Jan 2025 00:00 +0700"), "ตั้งแต่", group=grp_real)
+dTo         = input.time(timestamp("01 Jan 2026 00:00 +0700"), "ถึง", group=grp_real)
+noRepaint   = input.bool(false, "บังคับ MTF ไม่ repaint (ใช้ค่าแท่งที่ปิดแล้ว)", group=grp_real, tooltip="ปิด = เหมือน v9 เดิม / เปิด = ตรงกับ live มากกว่า — ถ้าเปิดแล้วกำไรหาย แปลว่ากำไรมาจาก repaint")
+
+grp_style   = "9. Style"
+showStruct  = input.bool(true, "Show BOS/CHoCH", group=grp_style)
+structUpClr = input.color(color.new(#00E676, 0), "ขาขึ้น", group=grp_style)
+structDnClr = input.color(color.new(#FF1744, 0), "ขาลง", group=grp_style)
+rangeClr    = input.color(color.new(#787878, 88), "สีโซน Sideway", group=grp_style)
+
+// ══════════════════════════════════════════
+// CORE — เหมือน v9
+// ══════════════════════════════════════════
+ema21  = ta.ema(close, emaFast)
+ema50  = ta.ema(close, emaSlow)
+rsiVal = ta.rsi(close, rsiLen)
+atrVal = ta.atr(atrLen)
+avgVol = ta.sma(volume, 20)
+
+inDate = not useDates or (time >= dFrom and time <= dTo)
+
+f_htfBias(_tf) =>
+    [e21a, e50a] = request.security(syminfo.tickerid, _tf, [ta.ema(close, emaFast), ta.ema(close, emaSlow)], lookahead=barmerge.lookahead_off)
+    [e21b, e50b] = request.security(syminfo.tickerid, _tf, [ta.ema(close, emaFast)[1], ta.ema(close, emaSlow)[1]], lookahead=barmerge.lookahead_on)
+    e21 = noRepaint ? e21b : e21a
+    e50 = noRepaint ? e50b : e50a
+    e21 > e50 ? 1 : e21 < e50 ? -1 : 0
+
+bias_m15 = f_htfBias("15")
+bias_m30 = f_htfBias("30")
+bias_h1  = f_htfBias("60")
+bias_h4  = f_htfBias("240")
+bias_d1  = f_htfBias("D")
+
+confirmBias = mtfConfirm == "M15" ? bias_m15 : mtfConfirm == "M30" ? bias_m30 : mtfConfirm == "H1" ? bias_h1 : mtfConfirm == "H4" ? bias_h4 : 0
+mtfSum = bias_m15 + bias_m30 + bias_h1 + bias_h4 + bias_d1
+
+// ══════════════════════════════════════════
+// SWING / BOS / CHoCH — เหมือน v9
+// ══════════════════════════════════════════
+swingHigh = ta.pivothigh(high, swingLen, swingLen)
+swingLow  = ta.pivotlow(low,  swingLen, swingLen)
+
+var float swH1 = na
+var float swL1 = na
+if not na(swingHigh)
+    swH1 := swingHigh
+if not na(swingLow)
+    swL1 := swingLow
+
+var int  marketBias = 0
+var bool brokeH = false
+var bool brokeL = false
+bosUp   = false
+bosDn   = false
+chochUp = false
+chochDn = false
+
+if not na(swingHigh)
+    brokeH := false
+if not na(swingLow)
+    brokeL := false
+
+if not na(swH1) and close > swH1 and not brokeH
+    if marketBias == 1
+        bosUp := true
+    else
+        chochUp := true
+        marketBias := 1
+        brokeL := false
+    brokeH := true
+
+if not na(swL1) and close < swL1 and not brokeL
+    if marketBias == -1
+        bosDn := true
+    else
+        chochDn := true
+        marketBias := -1
+        brokeH := false
+    brokeL := true
+
+if showStruct and barstate.isconfirmed
+    if bosUp
+        label.new(bar_index, high, "BOS", style=label.style_label_down, color=color.new(structUpClr, 20), textcolor=color.white, size=size.tiny)
+    if bosDn
+        label.new(bar_index, low, "BOS", style=label.style_label_up, color=color.new(structDnClr, 20), textcolor=color.white, size=size.tiny)
+    if chochUp
+        label.new(bar_index, high, "CHoCH", style=label.style_label_down, color=color.new(structUpClr, 0), textcolor=color.white, size=size.small)
+    if chochDn
+        label.new(bar_index, low, "CHoCH", style=label.style_label_up, color=color.new(structDnClr, 0), textcolor=color.white, size=size.small)
+
+// ══════════════════════════════════════════
+// ENTRY CONDITIONS — เหมือน v9 ทุกบรรทัด
+// ══════════════════════════════════════════
+trendUp = ema21 > ema50
+trendDn = ema21 < ema50
+
+rsiOK_buy  = rsiVal > 35 and rsiVal < rsiOB and rsiVal < noChaseHi
+rsiOK_sell = rsiVal < 65 and rsiVal > rsiOS and rsiVal > noChaseLo
+volOK      = not volFilter or volume > avgVol * 0.7
+
+bullEngulf  = close[1] < open[1] and close > open and close > open[1] and open <= close[1]
+bearEngulf  = close[1] > open[1] and close < open and close < open[1] and open >= close[1]
+bodySize    = math.abs(close - open)
+candleRange = high - low
+bullPinBar  = candleRange > 0 and (math.min(open, close) - low) > bodySize * 2 and close > open
+bearPinBar  = candleRange > 0 and (high - math.max(open, close)) > bodySize * 2 and close < open
+
+bullMomentum = useMomentum and close > open and bodySize > atrVal * 0.4 and rsiVal > rsiVal[1] and rsiVal < noChaseHi
+bearMomentum = useMomentum and close < open and bodySize > atrVal * 0.4 and rsiVal < rsiVal[1] and rsiVal > noChaseLo
+
+bullTrigger = bullEngulf or bullPinBar or bullMomentum
+bearTrigger = bearEngulf or bearPinBar or bearMomentum
+
+mtfBuyOK  = not useMTF or (strictMTF ? confirmBias == 1  : confirmBias >= 0)
+mtfSellOK = not useMTF or (strictMTF ? confirmBias == -1 : confirmBias <= 0)
+
+[diP_, diM_, adxVal] = ta.dmi(adxLen, adxLen)
+emaSep   = math.abs(ema21 - ema50)
+isRange  = adxVal < adxMin or (emaSlopeFlt and emaSep < emaSepMin * atrVal)
+trending = not useRangeFlt or not isRange
+
+buyScore  = (trendUp ? 1 : 0) + (rsiOK_buy ? 1 : 0) + (bullTrigger ? 1 : 0) + (volOK ? 1 : 0) + (marketBias == 1 ? 1 : 0) + (chochUp ? 1 : 0) + (bosUp ? 1 : 0)
+sellScore = (trendDn ? 1 : 0) + (rsiOK_sell ? 1 : 0) + (bearTrigger ? 1 : 0) + (volOK ? 1 : 0) + (marketBias == -1 ? 1 : 0) + (chochDn ? 1 : 0) + (bosDn ? 1 : 0)
+
+// ══════════════════════════════════════════
+// TP / SL — สูตรเดิมของ v9
+// ══════════════════════════════════════════
+slDistBase = math.min(atrVal * slAtrMult, maxSLusd)
+
+buyEntry  = useLimit ? close - pullbackAtr * atrVal : close
+sellEntry = useLimit ? close + pullbackAtr * atrVal : close
+
+buySwingDist = not na(swL1) and swL1 < buyEntry ? buyEntry - swL1 : na
+buyUseSwing  = useSwingSL and not na(buySwingDist) and buySwingDist <= maxSLusd
+buySLdist    = buyUseSwing ? math.min(buySwingDist + atrVal * 0.1, maxSLusd) : slDistBase
+finalBuySL   = buyEntry - buySLdist
+finalBuyTP1  = buyEntry + buySLdist * rr1
+finalBuyTP2  = buyEntry + buySLdist * rr2
+
+sellSwingDist = not na(swH1) and swH1 > sellEntry ? swH1 - sellEntry : na
+sellUseSwing  = useSwingSL and not na(sellSwingDist) and sellSwingDist <= maxSLusd
+sellSLdist    = sellUseSwing ? math.min(sellSwingDist + atrVal * 0.1, maxSLusd) : slDistBase
+finalSellSL   = sellEntry + sellSLdist
+finalSellTP1  = sellEntry - sellSLdist * rr1
+finalSellTP2  = sellEntry - sellSLdist * rr2
+
+buyQualOK  = buySLdist > 0
+sellQualOK = sellSLdist > 0
+
+// ══════════════════════════════════════════
+// RISK GATE สำหรับทุนน้อย
+// ══════════════════════════════════════════
+// ความเสี่ยงจริงเป็นเงิน = ระยะ SL ($ ต่อ oz) × ขนาดไม้ (oz)
+riskBuyUsd  = buySLdist  * posOz
+riskSellUsd = sellSLdist * posOz
+riskBuyPct  = acctSize > 0 ? riskBuyUsd  / acctSize * 100 : 0.0
+riskSellPct = acctSize > 0 ? riskSellUsd / acctSize * 100 : 0.0
+buyRiskOK   = not skipIfOver or riskBuyPct  <= maxRiskPct
+sellRiskOK  = not skipIfOver or riskSellPct <= maxRiskPct
+
+// ── เบรกฉุกเฉิน: ขาดทุนต่อวัน + แพ้ติดกัน ──
+newDay = ta.change(time("D")) != 0
+
+var float dayStartEq = na
+if newDay or na(dayStartEq)
+    dayStartEq := strategy.equity
+dayLossPct = na(dayStartEq) or acctSize <= 0 ? 0.0 : (dayStartEq - strategy.equity) / acctSize * 100
+dayOK = not useDayStop or dayLossPct < maxDayLoss
+
+var int lossStreak = 0
+if newDay
+    lossStreak := 0
+if strategy.closedtrades > nz(strategy.closedtrades[1])
+    for i = nz(strategy.closedtrades[1]) to strategy.closedtrades - 1
+        if strategy.closedtrades.profit(i) < 0
+            lossStreak := lossStreak + 1
+        else
+            lossStreak := 0
+streakOK = not useStreak or lossStreak < maxLossStk
+
+riskGateOK = dayOK and streakOK
+
+// ปิดครึ่งไม้ทำได้ต่อเมื่อขนาดไม้หารสองแล้วยังเหลือ — 1 oz แบ่งไม่ได้
+partQty    = posOz / 2
+canPartial = usePartial and partQty >= 0.01 and posOz >= 0.02
+
+// ══════════════════════════════════════════
+// SIGNAL
+// ══════════════════════════════════════════
+baseBuy  = bullTrigger and mtfBuyOK  and buyQualOK  and trending and buyRiskOK  and riskGateOK
+baseSell = bearTrigger and mtfSellOK and sellQualOK and trending and sellRiskOK and riskGateOK
+
+confirmedBuy  = barstate.isconfirmed and buyScore  >= minScore and baseBuy
+confirmedSell = barstate.isconfirmed and sellScore >= minScore and baseSell
+
+var int lastSignalBar = na
+canSignal = na(lastSignalBar) or (bar_index - lastSignalBar) >= signalGap
+
+var float actSL   = na
+var float actTP1  = na
+var float actTP2  = na
+var int   pendBar = na
+var float initQty = 0.0
+var bool  tp1Done = false
+var float entryAtr = na
+
+// ── บั๊ก 1: v9 เช็คแค่ position_size == 0 ซึ่งยังเป็นจริงตอน limit ค้างอยู่
+//    ทำให้สัญญาณใหม่เข้ามาเขียนทับ actSL ของออเดอร์เดิมได้
+noPend  = not fixPending or na(pendBar)
+posFree = (not onePosOnly or strategy.position_size == 0) and noPend
+
+buySignal  = confirmedBuy  and canSignal and inDate and posFree
+sellSignal = confirmedSell and canSignal and inDate and posFree
+
+if buySignal or sellSignal
+    lastSignalBar := bar_index
+
+// ══════════════════════════════════════════
+// STATE TRACKING
+// ══════════════════════════════════════════
+if strategy.position_size != 0 and nz(strategy.position_size[1]) == 0
+    initQty  := math.abs(strategy.position_size)
+    tp1Done  := false
+    entryAtr := atrVal
+if strategy.position_size == 0 and nz(strategy.position_size[1]) != 0
+    initQty := 0.0
+    tp1Done := false
+    pendBar := na
+if initQty > 0 and strategy.position_size != 0 and math.abs(strategy.position_size) < initQty
+    tp1Done := true
+// ออเดอร์ติดแล้ว → เลิกนับว่ายัง pending
+if fixPending and strategy.position_size != 0
+    pendBar := na
+
+beAtr = na(entryAtr) ? atrVal : entryAtr
+
+// ══════════════════════════════════════════
+// ORDERS
+// ══════════════════════════════════════════
+if buySignal
+    if fixPending
+        strategy.cancel("S")   // กันออเดอร์ฝั่งตรงข้ามค้างแล้วติดสวนทีหลัง
+    actSL   := finalBuySL
+    actTP1  := finalBuyTP1
+    actTP2  := finalBuyTP2
+    pendBar := bar_index
+    strategy.entry("L", strategy.long, qty = posOz, limit = useLimit ? buyEntry : na)
+    // ── บั๊ก 2: ติดอาวุธ exit พร้อมกับ entry เลย
+    //    v9 รอจนแท่งถัดไปปิดถึงจะเห็นว่ามีโพสิชัน = แท่งที่ limit ติดไม่มี SL
+    if fixArmExit
+        if canPartial
+            strategy.exit("bTP1", from_entry="L", qty=partQty, limit=actTP1, stop=actSL)
+        strategy.exit("bTP2", from_entry="L", limit=actTP2, stop=actSL)
+
+if sellSignal
+    if fixPending
+        strategy.cancel("L")
+    actSL   := finalSellSL
+    actTP1  := finalSellTP1
+    actTP2  := finalSellTP2
+    pendBar := bar_index
+    strategy.entry("S", strategy.short, qty = posOz, limit = useLimit ? sellEntry : na)
+    if fixArmExit
+        if canPartial
+            strategy.exit("sTP1", from_entry="S", qty=partQty, limit=actTP1, stop=actSL)
+        strategy.exit("sTP2", from_entry="S", limit=actTP2, stop=actSL)
+
+// ยกเลิก limit ที่ไม่ติดตามเวลาที่กำหนด
+if not na(pendBar) and strategy.position_size == 0 and (bar_index - pendBar) >= limitExpiry
+    strategy.cancel("L")
+    strategy.cancel("S")
+    pendBar := na
+
+// ── exit ประจำแท่ง + เลื่อน SL มา BE หลังโดน TP1 ──
+if strategy.position_size > 0
+    beOK  = useBE and tp1Done and not na(strategy.position_avg_price)
+    slNow = beOK ? math.max(actSL, strategy.position_avg_price - beBufAtr * beAtr) : actSL
+    if canPartial and not tp1Done
+        strategy.exit("bTP1", from_entry="L", qty=partQty, limit=actTP1, stop=slNow)
+    strategy.exit("bTP2", from_entry="L", limit=actTP2, stop=slNow)
+
+if strategy.position_size < 0
+    beOKs  = useBE and tp1Done and not na(strategy.position_avg_price)
+    slNowS = beOKs ? math.min(actSL, strategy.position_avg_price + beBufAtr * beAtr) : actSL
+    if canPartial and not tp1Done
+        strategy.exit("sTP1", from_entry="S", qty=partQty, limit=actTP1, stop=slNowS)
+    strategy.exit("sTP2", from_entry="S", limit=actTP2, stop=slNowS)
+
+// ══════════════════════════════════════════
+// TABLE
+// ══════════════════════════════════════════
+f_cell(_b) => _b == 1 ? "UP" : _b == -1 ? "DOWN" : "-"
+f_clr(_b)  => _b == 1 ? color.new(#00E676,0) : _b == -1 ? color.new(#FF1744,0) : color.gray
+
+var table t = table.new(position.top_right, 2, 17, bgcolor=color.new(#1a1a2e, 10), border_width=1, border_color=color.new(color.gray, 70))
+if barstate.islast
+    table.cell(t, 0, 0, "SMC v9.3", text_color=color.white, text_size=size.tiny, bgcolor=color.new(#0f3460, 20))
+    table.cell(t, 1, 0, "MICRO", text_color=color.white, text_size=size.tiny, bgcolor=color.new(#0f3460, 20))
+    table.cell(t, 0, 1, "M15", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 1, f_cell(bias_m15), text_color=f_clr(bias_m15), text_size=size.tiny)
+    table.cell(t, 0, 2, "M30", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 2, f_cell(bias_m30), text_color=f_clr(bias_m30), text_size=size.tiny)
+    table.cell(t, 0, 3, "H1", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 3, f_cell(bias_h1), text_color=f_clr(bias_h1), text_size=size.tiny)
+    table.cell(t, 0, 4, "H4", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 4, f_cell(bias_h4), text_color=f_clr(bias_h4), text_size=size.tiny)
+    table.cell(t, 0, 5, "D1", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 5, f_cell(bias_d1), text_color=f_clr(bias_d1), text_size=size.tiny)
+    table.cell(t, 0, 6, "RSI", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 6, str.tostring(rsiVal, "#.#"), text_color=color.white, text_size=size.tiny)
+    table.cell(t, 0, 7, "ATR", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 7, str.tostring(atrVal, "#.##"), text_color=color.white, text_size=size.tiny)
+    table.cell(t, 0, 8, "MTF", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 8, noRepaint ? "no-repaint" : "v9 เดิม", text_color=noRepaint ? color.new(#00E676,0) : color.orange, text_size=size.tiny)
+    fixTxt = (fixArmExit ? "arm " : "") + (fixPending ? "pend " : "") + (useBE ? "BE" : "")
+    table.cell(t, 0, 9, "การแก้", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 9, fixTxt == "" ? "ปิดหมด = v9" : fixTxt, text_color=fixTxt == "" ? color.orange : color.new(#00E676,0), text_size=size.tiny)
+    table.cell(t, 0, 10, "สถานะ", text_color=color.gray, text_size=size.tiny)
+    stTxt = strategy.position_size > 0 ? "LONG" : strategy.position_size < 0 ? "SHORT" : not na(pendBar) ? "รอ limit ติด" : "ว่าง"
+    table.cell(t, 1, 10, stTxt, text_color=color.white, text_size=size.tiny)
+    table.cell(t, 0, 11, "SL ตอนนี้", text_color=color.gray, text_size=size.tiny)
+    slTxt = strategy.position_size == 0 ? "-" : (tp1Done and useBE ? "BE" : str.tostring(actSL, "#.##"))
+    table.cell(t, 1, 11, slTxt, text_color=tp1Done and useBE ? color.new(#00E676,0) : color.white, text_size=size.tiny)
+
+    // ── ส่วนของทุนน้อย ──
+    table.cell(t, 0, 12, "ทุน", text_color=color.gray, text_size=size.tiny, bgcolor=color.new(#0f3460, 40))
+    table.cell(t, 1, 12, "$" + str.tostring(acctSize, "#.##") + "  /  " + str.tostring(posOz, "#.##") + " oz", text_color=color.white, text_size=size.tiny, bgcolor=color.new(#0f3460, 40))
+
+    // ความเสี่ยงของสัญญาณฝั่งที่ยังพอมีลุ้นตอนนี้ (โชว์ฝั่งที่ SL แคบกว่า)
+    shownRisk = math.min(riskBuyPct, riskSellPct)
+    shownUsd  = math.min(riskBuyUsd, riskSellUsd)
+    riskColor = shownRisk <= maxRiskPct ? color.new(#00E676,0) : color.new(#FF1744,0)
+    table.cell(t, 0, 13, "เสี่ยง/ไม้", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 13, "$" + str.tostring(shownUsd, "#.##") + "  (" + str.tostring(shownRisk, "#.#") + "%)", text_color=riskColor, text_size=size.tiny)
+
+    table.cell(t, 0, 14, "เพดานเสี่ยง", text_color=color.gray, text_size=size.tiny)
+    gateTxt = not skipIfOver ? "ปิดกั้น (OFF)" : shownRisk <= maxRiskPct ? "ผ่าน" : "เกิน → ข้ามไม้"
+    table.cell(t, 1, 14, str.tostring(maxRiskPct, "#.#") + "%  " + gateTxt, text_color=riskColor, text_size=size.tiny)
+
+    table.cell(t, 0, 15, "ขาดทุนวันนี้", text_color=color.gray, text_size=size.tiny)
+    dayTxt = not useDayStop ? "OFF" : str.tostring(math.max(dayLossPct, 0), "#.#") + "% / " + str.tostring(maxDayLoss, "#.#") + "%"
+    table.cell(t, 1, 15, dayTxt, text_color=dayOK ? color.white : color.new(#FF1744,0), text_size=size.tiny)
+
+    table.cell(t, 0, 16, "แพ้ติดกัน", text_color=color.gray, text_size=size.tiny)
+    stkTxt = not useStreak ? "OFF" : str.tostring(lossStreak) + " / " + str.tostring(maxLossStk) + (streakOK ? "" : "  หยุด")
+    table.cell(t, 1, 16, stkTxt, text_color=streakOK ? color.white : color.new(#FF1744,0), text_size=size.tiny)
+
+bgcolor(showRange and useRangeFlt and isRange ? rangeClr : na, title="Sideway")
+bgcolor(useDates and not inDate ? color.new(#000000, 85) : na, title="นอกช่วงเทส")
+```

@@ -11,6 +11,9 @@ Pine Script indicator สำหรับเทรด XAUUSD ตามแนว�
 | `docs/CODE_v9_original.md` | โค้ดต้นฉบับในรูปแบบ markdown |
 | `src/XAUUSD_SMC_Pro_v9_2_STRATEGY.pine` | strategy v9.2 — แก้ 3 บั๊ก + break-even |
 | `docs/CODE_v9_2_STRATEGY.md` | โค้ด v9.2 พร้อมปุ่มคัดลอก |
-| `docs/TEST_PLAN_v9_2.md` | แผนทดสอบทีละข้อ |
+| `docs/TEST_PLAN_v9_2.md` | แผนทดสอบทีละข้อ + ผลที่วัดจริงแล้ว |
+| `src/XAUUSD_SMC_Pro_v9_3_MICRO.pine` | v9.3 สำหรับทุนน้อย — risk gate + เบรกฉุกเฉิน |
+| `docs/CODE_v9_3_MICRO.md` | โค้ด v9.3 พร้อมปุ่มคัดลอก |
+| `docs/MICRO_30USD.md` | คู่มือเทรดด้วยทุน $30 |
 
 เริ่มที่ [`docs/REVIEW_v9.md`](docs/REVIEW_v9.md)
