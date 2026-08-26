@@ -37,6 +37,7 @@ strategy("XAUUSD SMC Pro v9.3 MICRO [STRATEGY]", overlay=true,
 grp_micro  = "0A. ทุนน้อย (Micro)"
 acctSize   = input.float(30.0, "ทุนจริงของคุณ ($)", minval=1, step=1, group=grp_micro, tooltip="ใส่ให้ตรงกับเงินในบัญชีจริง ใช้คำนวณ % ความเสี่ยง — ต้องตรงกับ Initial capital ในแท็บคุณสมบัติด้วย")
 posOz      = input.float(1.0, "ขนาดไม้ (oz)", minval=0.01, step=0.01, group=grp_micro, tooltip="0.01 lot = 1 oz (เล็กสุดของโบรกทั่วไป) / บัญชี cent ใส่ 0.01 ได้")
+minLotOz   = input.float(1.0, "ขนาดเล็กสุดที่โบรกรับ (oz)", minval=0.01, step=0.01, group=grp_micro, tooltip="ใช้กันไม่ให้ backtest แบ่งไม้เล็กกว่าที่เทรดจริงได้ — 0.01 lot = 1 oz / บัญชี cent ใส่ 0.01")
 maxRiskPct = input.float(10.0, "เพดานความเสี่ยงต่อไม้ (% ของทุน)", minval=0.5, maxval=100, step=0.5, group=grp_micro, tooltip="มาตรฐานคือ 1-2% / ทุน $30 ที่ 1 oz ต้องยอมสูงกว่านั้นมากถึงจะมีไม้เข้า")
 skipIfOver = input.bool(true, "ข้ามสัญญาณที่เสี่ยงเกินเพดาน", group=grp_micro, tooltip="เปิดไว้ = ปลอดภัย ถ้าไม่มีไม้เข้าเลยแปลว่า TF นี้ SL ใหญ่เกินทุน ต้องลง TF")
 useDayStop = input.bool(true, "หยุดเทรดทั้งวันเมื่อขาดทุนถึงเพดาน", group=grp_micro)
@@ -287,9 +288,10 @@ streakOK = not useStreak or lossStreak < maxLossStk
 
 riskGateOK = dayOK and streakOK
 
-// ปิดครึ่งไม้ทำได้ต่อเมื่อขนาดไม้หารสองแล้วยังเหลือ — 1 oz แบ่งไม่ได้
+// ปิดครึ่งไม้ทำได้ต่อเมื่อครึ่งหนึ่งยังไม่เล็กกว่าขนาดที่โบรกรับ
+// (ถ้าไม่กันตรงนี้ backtest จะแบ่ง 1 oz เป็น 0.5 oz ซึ่งโบรกจริงทำไม่ได้)
 partQty    = posOz / 2
-canPartial = usePartial and partQty >= 0.01 and posOz >= 0.02
+canPartial = usePartial and partQty >= minLotOz
 
 // ══════════════════════════════════════════
 // SIGNAL
@@ -431,7 +433,7 @@ if barstate.islast
 
     // ── ส่วนของทุนน้อย ──
     table.cell(t, 0, 12, "ทุน", text_color=color.gray, text_size=size.tiny, bgcolor=color.new(#0f3460, 40))
-    table.cell(t, 1, 12, "$" + str.tostring(acctSize, "#.##") + "  /  " + str.tostring(posOz, "#.##") + " oz", text_color=color.white, text_size=size.tiny, bgcolor=color.new(#0f3460, 40))
+    table.cell(t, 1, 12, "$" + str.tostring(acctSize, "#.##") + "  /  " + str.tostring(posOz, "#.##") + " oz" + (canPartial ? "  (แบ่งครึ่งได้)" : "  (TP2 อย่างเดียว)"), text_color=color.white, text_size=size.tiny, bgcolor=color.new(#0f3460, 40))
 
     // ความเสี่ยงของสัญญาณฝั่งที่ยังพอมีลุ้นตอนนี้ (โชว์ฝั่งที่ SL แคบกว่า)
     shownRisk = math.min(riskBuyPct, riskSellPct)
