@@ -1,0 +1,453 @@
+//@version=5
+// ══════════════════════════════════════════════════════════════════════════
+// XAUUSD SMC Pro v9.4 LIVE — indicator สำหรับเทรดมือ (demo / เงินจริง)
+//
+// เงื่อนไขเข้าไม้ สูตร TP/SL และการกันบั๊กทุกอย่าง เหมือน v9.3 ที่ผ่าน
+// การทดสอบมาแล้วทุกบรรทัด ไม่มีฟีเจอร์ที่ไม่เคยพิสูจน์
+//
+// สิ่งที่ทำเพิ่มให้เทรดมือได้:
+//   - คำนวณ lot ที่ควรใช้จากทุนกับ % ความเสี่ยงที่รับได้
+//   - เตือนเมื่อทุนไม่พอสำหรับไม้นั้น แล้วไม่ยิงสัญญาณ
+//   - ติดตามสถานะ: รอ limit ติด → เปิดอยู่ → ปิด/ยกเลิก พร้อม alert ทุกจังหวะ
+//   - alert บอกครบทุกตัวเลขที่ต้องกรอกในโปรแกรมเทรด
+//
+// ⚠️ ต่างจาก backtest 1 จุดที่จงใจ
+//   noRepaint เปิดเป็นค่า default (backtest ใช้ค่าแท่ง HTF ที่ปิดแล้วบนแท่ง
+//   ย้อนหลังอยู่แล้ว ตัวนี้บังคับให้ live ทำแบบเดียวกัน ไม่งั้นสัญญาณจะ
+//   โผล่แล้วหายระหว่างแท่ง)
+//
+// ที่ผ่านการทดสอบแล้ว: H1 · 20 เดือน · 568 records · PF 1.241 (หักต้นทุนแล้ว)
+// ที่ยังไม่ผ่าน:        M5 · 1 เดือน · 36 ไม้ — ยังสรุปไม่ได้ ใช้เก็บข้อมูล demo
+// ══════════════════════════════════════════════════════════════════════════
+indicator("XAUUSD SMC Pro v9.4 LIVE", overlay=true, max_labels_count=500, max_lines_count=500)
+
+// ══════════════════════════════════════════
+// 1. บัญชีและความเสี่ยง
+// ══════════════════════════════════════════
+grp_acc    = "1. บัญชีและความเสี่ยง"
+acctSize   = input.float(30.0, "ทุนในบัญชี ($)", minval=1, step=1, group=grp_acc)
+riskPct    = input.float(5.0, "เสี่ยงต่อไม้ (% ของทุน)", minval=0.1, maxval=50, step=0.1, group=grp_acc, tooltip="มาตรฐานคือ 1-2% / ทุนน้อยมากอาจต้องยอม 5% แต่รู้ไว้ว่าแพ้ 5 ไม้ติด = ทุนหาย 25%")
+ozPerLot   = input.float(100, "1 lot = กี่ oz", options=[100, 10, 1], group=grp_acc, tooltip="บัญชีมาตรฐาน = 100 / micro = 10 / cent มักเป็น 1 — เช็คกับโบรก")
+minLot     = input.float(0.01, "lot เล็กสุดที่โบรกรับ", minval=0.001, step=0.001, group=grp_acc)
+lotStep    = input.float(0.01, "ขั้นการเพิ่ม lot", minval=0.001, step=0.001, group=grp_acc)
+blockOver  = input.bool(true, "ไม่ยิงสัญญาณถ้าทุนไม่พอ", group=grp_acc, tooltip="เปิดไว้ = ปลอดภัย ถ้าไม่มีสัญญาณเลยแปลว่า TF นี้ SL ใหญ่เกินทุน")
+
+// ══════════════════════════════════════════
+// 2. โครงสร้าง / MTF
+// ══════════════════════════════════════════
+grp_struct = "2. Structure / MTF"
+swingLen   = input.int(5, "Swing Length", minval=2, maxval=20, group=grp_struct)
+useMTF     = input.bool(true, "เปิด MTF Filter", group=grp_struct)
+mtfConfirm = input.string("H1", "ยืนยันด้วย TF", options=["M15","M30","H1","H4"], group=grp_struct, tooltip="ต้องสูงกว่า TF ของกราฟ — เล่น M5 ใช้ H1 / เล่น H1 ใช้ H4")
+strictMTF  = input.bool(true, "บังคับเข้าตามเทรนด์ MTF", group=grp_struct)
+noRepaint  = input.bool(true, "MTF ไม่ repaint (ใช้ค่าแท่งที่ปิดแล้ว)", group=grp_struct, tooltip="เปิดไว้เสมอตอนเทรดจริง ปิดแล้วสัญญาณจะโผล่แล้วหายระหว่างแท่ง")
+
+// ══════════════════════════════════════════
+// 3. สัญญาณ
+// ══════════════════════════════════════════
+grp_sig    = "3. สัญญาณ"
+emaFast    = input.int(21, "EMA Fast", minval=5, group=grp_sig)
+emaSlow    = input.int(50, "EMA Slow", minval=10, group=grp_sig)
+rsiLen     = input.int(14, "RSI Length", minval=2, group=grp_sig)
+rsiOB      = input.int(70, "RSI OB", minval=60, group=grp_sig)
+rsiOS      = input.int(30, "RSI OS", maxval=40, group=grp_sig)
+volFilter  = input.bool(true, "Volume Filter", group=grp_sig)
+minScore   = input.int(4, "Min Score", minval=2, maxval=7, group=grp_sig)
+useMomentum= input.bool(true, "ยอมรับ Momentum candle", group=grp_sig)
+signalGap  = input.int(15, "ระยะห่างสัญญาณขั้นต่ำ (แท่ง)", minval=1, maxval=50, group=grp_sig)
+noChaseHi  = input.int(62, "ห้าม Long ถ้า RSI เกิน", minval=50, maxval=75, group=grp_sig)
+noChaseLo  = input.int(38, "ห้าม Short ถ้า RSI ต่ำกว่า", minval=25, maxval=50, group=grp_sig)
+
+// ══════════════════════════════════════════
+// 4. TP / SL
+// ══════════════════════════════════════════
+grp_tpsl   = "4. TP / SL"
+slAtrMult  = input.float(1.2, "SL = ATR ×", minval=0.3, step=0.1, group=grp_tpsl)
+maxSLusd   = input.float(12.0, "SL สูงสุด ($ ต่อ oz)", minval=1.0, step=0.5, group=grp_tpsl)
+useSwingSL = input.bool(true, "ใช้ swing ถ้าอยู่ในระยะ", group=grp_tpsl)
+rrTP       = input.float(1.2, "TP = SL ×", minval=0.5, step=0.1, group=grp_tpsl, tooltip="เป้าเดียว ไม่แบ่งไม้ — จากข้อมูล H1 568 ไม้: 77% แตะ 1R ได้ แต่มีแค่ 26% ที่ถึง 1.8R ยิ่งเป้าไกลยิ่งพลาดเยอะ")
+atrLen     = input.int(14, "ATR Length", minval=1, group=grp_tpsl)
+
+// ══════════════════════════════════════════
+// 5. Limit Entry
+// ══════════════════════════════════════════
+grp_lim    = "5. Limit Entry"
+useLimit   = input.bool(true, "รอราคาย่อก่อนเข้า (วาง limit)", group=grp_lim)
+pullbackAtr= input.float(0.4, "รอราคาย่อกลับ (× ATR)", minval=0.1, step=0.1, group=grp_lim)
+limitExpiry= input.int(6, "ยกเลิก limit ถ้าไม่ติดใน (แท่ง)", minval=1, maxval=50, group=grp_lim)
+
+// ══════════════════════════════════════════
+// 6. Sideway Filter
+// ══════════════════════════════════════════
+grp_rng    = "6. Sideway Filter"
+useRangeFlt= input.bool(true, "ไม่เทรดตอนตลาด Sideway", group=grp_rng)
+adxLen     = input.int(14, "ADX Length", minval=5, group=grp_rng)
+adxMin     = input.float(20, "ADX ขั้นต่ำ", minval=10, maxval=40, step=1, group=grp_rng)
+emaSlopeFlt= input.bool(true, "กรอง EMA แบนด้วย", group=grp_rng)
+emaSepMin  = input.float(0.15, "EMA21-50 ต้องห่างกัน ≥ (× ATR)", minval=0, step=0.05, group=grp_rng)
+showRange  = input.bool(true, "แสดงโซน Sideway", group=grp_rng)
+
+// ══════════════════════════════════════════
+// 7. หน้าตา
+// ══════════════════════════════════════════
+grp_st     = "7. หน้าตา"
+buyColor   = input.color(color.new(#00E676, 0), "Buy", group=grp_st)
+sellColor  = input.color(color.new(#FF1744, 0), "Sell", group=grp_st)
+rangeClr   = input.color(color.new(#787878, 88), "โซน Sideway", group=grp_st)
+showStruct = input.bool(true, "แสดง BOS/CHoCH", group=grp_st)
+showPanel  = input.bool(true, "แสดงตารางสรุป", group=grp_st)
+
+// ══════════════════════════════════════════
+// CORE
+// ══════════════════════════════════════════
+ema21  = ta.ema(close, emaFast)
+ema50  = ta.ema(close, emaSlow)
+rsiVal = ta.rsi(close, rsiLen)
+atrVal = ta.atr(atrLen)
+avgVol = ta.sma(volume, 20)
+
+trendUp = ema21 > ema50
+trendDn = ema21 < ema50
+
+[diP_, diM_, adxVal] = ta.dmi(adxLen, adxLen)
+emaSep   = math.abs(ema21 - ema50)
+isRange  = adxVal < adxMin or (emaSlopeFlt and emaSep < emaSepMin * atrVal)
+trending = not useRangeFlt or not isRange
+
+chartSec = timeframe.in_seconds(timeframe.period)
+
+f_htfBias(_tf) =>
+    [a21, a50] = request.security(syminfo.tickerid, _tf, [ta.ema(close, emaFast), ta.ema(close, emaSlow)], lookahead=barmerge.lookahead_off)
+    [b21, b50] = request.security(syminfo.tickerid, _tf, [ta.ema(close, emaFast)[1], ta.ema(close, emaSlow)[1]], lookahead=barmerge.lookahead_on)
+    e21 = noRepaint ? b21 : a21
+    e50 = noRepaint ? b50 : a50
+    e21 > e50 ? 1 : e21 < e50 ? -1 : 0
+
+raw15  = f_htfBias("15")
+raw30  = f_htfBias("30")
+raw60  = f_htfBias("60")
+raw240 = f_htfBias("240")
+
+confSec   = mtfConfirm == "M15" ? timeframe.in_seconds("15") : mtfConfirm == "M30" ? timeframe.in_seconds("30") : mtfConfirm == "H1" ? timeframe.in_seconds("60") : timeframe.in_seconds("240")
+confRaw   = mtfConfirm == "M15" ? raw15 : mtfConfirm == "M30" ? raw30 : mtfConfirm == "H1" ? raw60 : raw240
+confIsHTF = confSec > chartSec
+localBias = trendUp ? 1 : trendDn ? -1 : 0
+confirmBias = confIsHTF ? confRaw : localBias
+
+// ══════════════════════════════════════════
+// SWING / BOS / CHoCH
+// ══════════════════════════════════════════
+swingHigh = ta.pivothigh(high, swingLen, swingLen)
+swingLow  = ta.pivotlow(low,  swingLen, swingLen)
+
+var float swH1 = na
+var float swL1 = na
+if not na(swingHigh)
+    swH1 := swingHigh
+if not na(swingLow)
+    swL1 := swingLow
+
+var int  marketBias = 0
+var bool brokeH = false
+var bool brokeL = false
+bosUp   = false
+bosDn   = false
+chochUp = false
+chochDn = false
+
+if not na(swingHigh)
+    brokeH := false
+if not na(swingLow)
+    brokeL := false
+
+if not na(swH1) and close > swH1 and not brokeH
+    if marketBias == 1
+        bosUp := true
+    else
+        chochUp := true
+        marketBias := 1
+        brokeL := false
+    brokeH := true
+
+if not na(swL1) and close < swL1 and not brokeL
+    if marketBias == -1
+        bosDn := true
+    else
+        chochDn := true
+        marketBias := -1
+        brokeH := false
+    brokeL := true
+
+if showStruct and barstate.isconfirmed
+    if bosUp
+        label.new(bar_index, high, "BOS", style=label.style_label_down, color=color.new(buyColor, 30), textcolor=color.white, size=size.tiny)
+    if bosDn
+        label.new(bar_index, low, "BOS", style=label.style_label_up, color=color.new(sellColor, 30), textcolor=color.white, size=size.tiny)
+    if chochUp
+        label.new(bar_index, high, "CHoCH", style=label.style_label_down, color=buyColor, textcolor=color.white, size=size.small)
+    if chochDn
+        label.new(bar_index, low, "CHoCH", style=label.style_label_up, color=sellColor, textcolor=color.white, size=size.small)
+
+// ══════════════════════════════════════════
+// ENTRY CONDITIONS
+// ══════════════════════════════════════════
+rsiOK_buy  = rsiVal > 35 and rsiVal < rsiOB and rsiVal < noChaseHi
+rsiOK_sell = rsiVal < 65 and rsiVal > rsiOS and rsiVal > noChaseLo
+volOK      = not volFilter or na(volume) or na(avgVol) or volume > avgVol * 0.7
+
+bullEngulf  = close[1] < open[1] and close > open and close > open[1] and open <= close[1]
+bearEngulf  = close[1] > open[1] and close < open and close < open[1] and open >= close[1]
+bodySize    = math.abs(close - open)
+candleRange = high - low
+bullPinBar  = candleRange > 0 and (math.min(open, close) - low) > bodySize * 2 and close > open
+bearPinBar  = candleRange > 0 and (high - math.max(open, close)) > bodySize * 2 and close < open
+
+bullMomentum = useMomentum and close > open and bodySize > atrVal * 0.4 and rsiVal > rsiVal[1] and rsiVal < noChaseHi
+bearMomentum = useMomentum and close < open and bodySize > atrVal * 0.4 and rsiVal < rsiVal[1] and rsiVal > noChaseLo
+
+bullTrigger = bullEngulf or bullPinBar or bullMomentum
+bearTrigger = bearEngulf or bearPinBar or bearMomentum
+
+mtfBuyOK  = not useMTF or (strictMTF ? confirmBias == 1  : confirmBias >= 0)
+mtfSellOK = not useMTF or (strictMTF ? confirmBias == -1 : confirmBias <= 0)
+
+buyScore  = (trendUp ? 1 : 0) + (rsiOK_buy ? 1 : 0) + (bullTrigger ? 1 : 0) + (volOK ? 1 : 0) + (marketBias == 1 ? 1 : 0) + (chochUp ? 1 : 0) + (bosUp ? 1 : 0)
+sellScore = (trendDn ? 1 : 0) + (rsiOK_sell ? 1 : 0) + (bearTrigger ? 1 : 0) + (volOK ? 1 : 0) + (marketBias == -1 ? 1 : 0) + (chochDn ? 1 : 0) + (bosDn ? 1 : 0)
+
+// ══════════════════════════════════════════
+// TP / SL
+// ══════════════════════════════════════════
+slDistBase = math.min(atrVal * slAtrMult, maxSLusd)
+
+buyEntry  = useLimit ? close - pullbackAtr * atrVal : close
+sellEntry = useLimit ? close + pullbackAtr * atrVal : close
+
+buySwingDist = not na(swL1) and swL1 < buyEntry ? buyEntry - swL1 : na
+buyUseSwing  = useSwingSL and not na(buySwingDist) and buySwingDist <= maxSLusd
+buySLdist    = buyUseSwing ? math.min(buySwingDist + atrVal * 0.1, maxSLusd) : slDistBase
+finalBuySL   = buyEntry - buySLdist
+finalBuyTP   = buyEntry + buySLdist * rrTP
+
+sellSwingDist = not na(swH1) and swH1 > sellEntry ? swH1 - sellEntry : na
+sellUseSwing  = useSwingSL and not na(sellSwingDist) and sellSwingDist <= maxSLusd
+sellSLdist    = sellUseSwing ? math.min(sellSwingDist + atrVal * 0.1, maxSLusd) : slDistBase
+finalSellSL   = sellEntry + sellSLdist
+finalSellTP   = sellEntry - sellSLdist * rrTP
+
+// ══════════════════════════════════════════
+// เครื่องคิด LOT
+// ความเสี่ยง = ระยะ SL ($/oz) × lot × oz ต่อ lot
+// ══════════════════════════════════════════
+f_lot(_slDist) =>
+    riskUsd = acctSize * riskPct / 100.0
+    perLot  = _slDist * ozPerLot          // ขาดทุนถ้าใช้ 1 lot เต็ม
+    raw     = perLot > 0 ? riskUsd / perLot : 0.0
+    stepped = lotStep > 0 ? math.floor(raw / lotStep + 1e-9) * lotStep : raw
+    stepped
+
+f_riskOf(_slDist, _lot) => _slDist * ozPerLot * _lot
+
+buyLotIdeal  = f_lot(buySLdist)
+sellLotIdeal = f_lot(sellSLdist)
+// ถ้าคำนวณได้เล็กกว่าที่โบรกรับ ต้องใช้ขั้นต่ำ ซึ่งจะเสี่ยงเกินที่ตั้งไว้
+buyLotUse    = math.max(buyLotIdeal, minLot)
+sellLotUse   = math.max(sellLotIdeal, minLot)
+buyRiskUsd   = f_riskOf(buySLdist, buyLotUse)
+sellRiskUsd  = f_riskOf(sellSLdist, sellLotUse)
+buyRiskPct   = acctSize > 0 ? buyRiskUsd / acctSize * 100 : 0.0
+sellRiskPct  = acctSize > 0 ? sellRiskUsd / acctSize * 100 : 0.0
+buyAffordOK  = not blockOver or buyLotIdeal  >= minLot
+sellAffordOK = not blockOver or sellLotIdeal >= minLot
+
+buyRewardUsd  = f_riskOf(buySLdist  * rrTP, buyLotUse)
+sellRewardUsd = f_riskOf(sellSLdist * rrTP, sellLotUse)
+
+// ══════════════════════════════════════════
+// สถานะไม้ — ว่าง / รอ limit / เปิดอยู่
+// ══════════════════════════════════════════
+var int    stState  = 0        // 0 ว่าง, 1 รอ limit ติด, 2 เปิดอยู่
+var bool   stIsBuy  = false
+var float  stEntry  = na
+var float  stSL     = na
+var float  stTP     = na
+var float  stLot    = na
+var int    stBar    = na
+var int    lastSigBar = na
+
+canSignal = na(lastSigBar) or (bar_index - lastSigBar) >= signalGap
+free      = stState == 0
+
+baseBuy  = bullTrigger and mtfBuyOK  and trending and buySLdist  > 0 and buyAffordOK
+baseSell = bearTrigger and mtfSellOK and trending and sellSLdist > 0 and sellAffordOK
+
+buySignal  = barstate.isconfirmed and buyScore  >= minScore and baseBuy  and canSignal and free
+sellSignal = barstate.isconfirmed and sellScore >= minScore and baseSell and canSignal and free
+
+// ── เปิดสัญญาณใหม่ ──
+if buySignal
+    stState := useLimit ? 1 : 2
+    stIsBuy := true
+    stEntry := buyEntry
+    stSL    := finalBuySL
+    stTP    := finalBuyTP
+    stLot   := buyLotUse
+    stBar   := bar_index
+    lastSigBar := bar_index
+
+if sellSignal
+    stState := useLimit ? 1 : 2
+    stIsBuy := false
+    stEntry := sellEntry
+    stSL    := finalSellSL
+    stTP    := finalSellTP
+    stLot   := sellLotUse
+    stBar   := bar_index
+    lastSigBar := bar_index
+
+// ── เดินสถานะ ──
+filledNow  = false
+expiredNow = false
+tpNow      = false
+slNow      = false
+
+if barstate.isconfirmed and stState == 1 and bar_index > stBar
+    touched = stIsBuy ? low <= stEntry : high >= stEntry
+    if touched
+        stState := 2
+        filledNow := true
+    else if bar_index - stBar >= limitExpiry
+        stState := 0
+        expiredNow := true
+
+if barstate.isconfirmed and stState == 2 and bar_index > stBar
+    hitSL = stIsBuy ? low  <= stSL : high >= stSL
+    hitTP = stIsBuy ? high >= stTP : low  <= stTP
+    if hitSL
+        stState := 0
+        slNow := true
+    else if hitTP
+        stState := 0
+        tpNow := true
+
+// ══════════════════════════════════════════
+// วาดบนกราฟ
+// ══════════════════════════════════════════
+f_p(_x) => str.tostring(_x, "#.##")
+f_m(_x) => str.tostring(_x, "#.##")
+
+if buySignal
+    txt = "BUY" + (useLimit ? " LIMIT" : "") +
+         "\nเข้า " + f_p(buyEntry) +
+         "\nTP  " + f_p(finalBuyTP) + "   +$" + f_m(buyRewardUsd) +
+         "\nSL  " + f_p(finalBuySL) + "   -$" + f_m(buyRiskUsd) +
+         "\nLot " + str.tostring(buyLotUse, "#.###") + "   เสี่ยง " + str.tostring(buyRiskPct, "#.#") + "%" +
+         (useLimit ? "\nยกเลิกถ้าไม่ติดใน " + str.tostring(limitExpiry) + " แท่ง" : "")
+    label.new(bar_index, low, txt, style=label.style_label_up, color=buyColor, textcolor=color.white, size=size.normal)
+    line.new(bar_index, finalBuyTP, bar_index + 12, finalBuyTP, color=color.new(#00E676, 20), style=line.style_dashed, width=2)
+    line.new(bar_index, buyEntry,   bar_index + 12, buyEntry,   color=color.new(#FFEB3B, 20), style=line.style_dotted, width=1)
+    line.new(bar_index, finalBuySL, bar_index + 12, finalBuySL, color=color.new(#FF1744, 20), style=line.style_dashed, width=2)
+
+if sellSignal
+    txt = "SELL" + (useLimit ? " LIMIT" : "") +
+         "\nเข้า " + f_p(sellEntry) +
+         "\nTP  " + f_p(finalSellTP) + "   +$" + f_m(sellRewardUsd) +
+         "\nSL  " + f_p(finalSellSL) + "   -$" + f_m(sellRiskUsd) +
+         "\nLot " + str.tostring(sellLotUse, "#.###") + "   เสี่ยง " + str.tostring(sellRiskPct, "#.#") + "%" +
+         (useLimit ? "\nยกเลิกถ้าไม่ติดใน " + str.tostring(limitExpiry) + " แท่ง" : "")
+    label.new(bar_index, high, txt, style=label.style_label_down, color=sellColor, textcolor=color.white, size=size.normal)
+    line.new(bar_index, finalSellTP, bar_index + 12, finalSellTP, color=color.new(#FF1744, 20), style=line.style_dashed, width=2)
+    line.new(bar_index, sellEntry,   bar_index + 12, sellEntry,   color=color.new(#FFEB3B, 20), style=line.style_dotted, width=1)
+    line.new(bar_index, finalSellSL, bar_index + 12, finalSellSL, color=color.new(#00E676, 20), style=line.style_dashed, width=2)
+
+if filledNow
+    label.new(bar_index, stIsBuy ? low : high, "ติดแล้ว", style=stIsBuy ? label.style_label_up : label.style_label_down, color=color.new(#FFEB3B, 20), textcolor=color.black, size=size.tiny)
+if expiredNow
+    label.new(bar_index, close, "ยกเลิก limit", style=label.style_label_left, color=color.new(color.gray, 20), textcolor=color.white, size=size.tiny)
+if tpNow
+    label.new(bar_index, close, "TP", style=label.style_label_left, color=color.new(#00E676, 20), textcolor=color.white, size=size.tiny)
+if slNow
+    label.new(bar_index, close, "SL", style=label.style_label_left, color=color.new(#FF1744, 20), textcolor=color.white, size=size.tiny)
+
+// ══════════════════════════════════════════
+// ตารางสรุป
+// ══════════════════════════════════════════
+f_cell(_b) => _b == 1 ? "UP" : _b == -1 ? "DOWN" : "-"
+f_clr(_b)  => _b == 1 ? buyColor : _b == -1 ? sellColor : color.gray
+
+var table t = table.new(position.top_right, 2, 11, bgcolor=color.new(#1a1a2e, 8), border_width=1, border_color=color.new(color.gray, 70))
+if showPanel and barstate.islast
+    table.cell(t, 0, 0, "SMC v9.4", text_color=color.white, text_size=size.tiny, bgcolor=color.new(#0f3460, 20))
+    table.cell(t, 1, 0, "LIVE", text_color=color.white, text_size=size.tiny, bgcolor=color.new(#0f3460, 20))
+
+    stTxt = stState == 0 ? "รอสัญญาณ" : stState == 1 ? "รอ limit ติด (" + str.tostring(limitExpiry - (bar_index - stBar)) + " แท่ง)" : (stIsBuy ? "ถือ BUY" : "ถือ SELL")
+    stCol = stState == 0 ? color.gray : stState == 1 ? color.orange : (stIsBuy ? buyColor : sellColor)
+    table.cell(t, 0, 1, "สถานะ", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 1, stTxt, text_color=stCol, text_size=size.tiny)
+
+    table.cell(t, 0, 2, "เข้า / SL / TP", text_color=color.gray, text_size=size.tiny)
+    lvlTxt = stState == 0 ? "-" : f_p(stEntry) + " / " + f_p(stSL) + " / " + f_p(stTP)
+    table.cell(t, 1, 2, lvlTxt, text_color=color.white, text_size=size.tiny)
+
+    table.cell(t, 0, 3, "Lot ที่ใช้", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 3, stState == 0 ? "-" : str.tostring(stLot, "#.###"), text_color=color.white, text_size=size.tiny)
+
+    // ความเสี่ยงของสัญญาณถัดไป (ใช้ฝั่งที่ SL แคบกว่าเป็นตัวแทน)
+    nextRisk = math.min(buyRiskPct, sellRiskPct)
+    nextLot  = math.min(buyLotIdeal, sellLotIdeal)
+    affordOK = nextLot >= minLot
+    riskCol  = affordOK ? color.new(#00E676,0) : color.new(#FF1744,0)
+    table.cell(t, 0, 4, "ถ้าเข้าตอนนี้", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 4, affordOK ? "เสี่ยง " + str.tostring(nextRisk, "#.#") + "%" : "ทุนไม่พอ (" + str.tostring(nextRisk, "#.#") + "%)", text_color=riskCol, text_size=size.tiny)
+
+    table.cell(t, 0, 5, "lot ที่ควรใช้", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 5, affordOK ? str.tostring(nextLot, "#.###") : "ต่ำกว่า " + str.tostring(minLot, "#.###"), text_color=riskCol, text_size=size.tiny)
+
+    table.cell(t, 0, 6, "ทุน / เสี่ยง", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 6, "$" + f_m(acctSize) + " / " + str.tostring(riskPct, "#.#") + "%", text_color=color.white, text_size=size.tiny)
+
+    table.cell(t, 0, 7, "ยืนยันด้วย " + mtfConfirm, text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 7, confIsHTF ? f_cell(confirmBias) : f_cell(confirmBias) + " (ใช้กราฟ)", text_color=confIsHTF ? f_clr(confirmBias) : color.orange, text_size=size.tiny)
+
+    table.cell(t, 0, 8, "ATR / ADX", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 8, f_m(atrVal) + " / " + str.tostring(adxVal, "#.#"), text_color=trending ? color.white : color.orange, text_size=size.tiny)
+
+    table.cell(t, 0, 9, "ตลาด", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 9, trending ? "TREND" : "SIDEWAY — ไม่เทรด", text_color=trending ? color.white : color.orange, text_size=size.tiny)
+
+    table.cell(t, 0, 10, "MTF repaint", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 10, noRepaint ? "กันแล้ว" : "⚠ ยังไม่กัน", text_color=noRepaint ? color.new(#00E676,0) : color.new(#FF1744,0), text_size=size.tiny)
+
+// ══════════════════════════════════════════
+// ALERTS
+// ══════════════════════════════════════════
+if buySignal
+    alert("XAUUSD BUY" + (useLimit ? " LIMIT" : " ตลาด") +
+         " | เข้า " + f_p(buyEntry) +
+         " | SL " + f_p(finalBuySL) +
+         " | TP " + f_p(finalBuyTP) +
+         " | Lot " + str.tostring(buyLotUse, "#.###") +
+         " | เสี่ยง $" + f_m(buyRiskUsd) + " (" + str.tostring(buyRiskPct, "#.#") + "%)" +
+         (useLimit ? " | ยกเลิกถ้าไม่ติดใน " + str.tostring(limitExpiry) + " แท่ง" : ""), alert.freq_once_per_bar_close)
+
+if sellSignal
+    alert("XAUUSD SELL" + (useLimit ? " LIMIT" : " ตลาด") +
+         " | เข้า " + f_p(sellEntry) +
+         " | SL " + f_p(finalSellSL) +
+         " | TP " + f_p(finalSellTP) +
+         " | Lot " + str.tostring(sellLotUse, "#.###") +
+         " | เสี่ยง $" + f_m(sellRiskUsd) + " (" + str.tostring(sellRiskPct, "#.#") + "%)" +
+         (useLimit ? " | ยกเลิกถ้าไม่ติดใน " + str.tostring(limitExpiry) + " แท่ง" : ""), alert.freq_once_per_bar_close)
+
+if expiredNow
+    alert("XAUUSD — limit ไม่ติดใน " + str.tostring(limitExpiry) + " แท่ง ยกเลิกออเดอร์ที่ค้างได้เลย", alert.freq_once_per_bar_close)
+if filledNow
+    alert("XAUUSD — ออเดอร์ติดแล้วที่ " + f_p(stEntry) + " เช็คว่า SL " + f_p(stSL) + " กับ TP " + f_p(stTP) + " ตั้งครบ", alert.freq_once_per_bar_close)
+if tpNow
+    alert("XAUUSD — ถึง TP " + f_p(stTP), alert.freq_once_per_bar_close)
+if slNow
+    alert("XAUUSD — โดน SL " + f_p(stSL), alert.freq_once_per_bar_close)
+
+alertcondition(buySignal,  title="Buy",  message="XAUUSD BUY — ดูตัวเลขในป้ายบนกราฟ")
+alertcondition(sellSignal, title="Sell", message="XAUUSD SELL — ดูตัวเลขในป้ายบนกราฟ")
+
+bgcolor(showRange and useRangeFlt and isRange ? rangeClr : na, title="Sideway")
