@@ -5,6 +5,9 @@ Pine Script indicator สำหรับเทรด XAUUSD ตามแนว�
 | ไฟล์ | คำอธิบาย |
 |---|---|
 | `src/XAUUSD_SMC_Pro_v9.pine` | เวอร์ชันต้นฉบับ (เก็บไว้เทียบ) |
+| `src/XAUUSD_SMC_Pro_v9_FIXED.pine` | **v9 ต้นฉบับ แก้เฉพาะบั๊ก 11 จุด ไม่เพิ่มอะไรเลย** |
+| `docs/V9_FIXED.md` | แก้อะไรบ้าง + อะไรที่ตั้งใจไม่แก้ และเพราะอะไร |
+| `docs/CODE_v9_FIXED.md` | โค้ด v9 (fixed) พร้อมปุ่มคัดลอก |
 | `src/XAUUSD_SMC_Pro_v9_1_H1.pine` | เวอร์ชันแก้บั๊ก + ปรับค่าสำหรับ H1 |
 | `docs/REVIEW_v9.md` | รายละเอียดบั๊กที่พบและวิธีแก้ |
 | `docs/CODE_v9_1_H1.md` | โค้ด v9.1 ในรูปแบบ markdown — มีปุ่มคัดลอกในตัว |
@@ -25,7 +28,11 @@ Pine Script indicator สำหรับเทรด XAUUSD ตามแนว�
 | `docs/CODE_v10_ICT.md` | โค้ด v10 พร้อมปุ่มคัดลอก |
 | `docs/V10_GUIDE.md` | คู่มือ v10 + ตารางบั๊กที่แก้ทั้งหมด |
 
-## สองสายที่แยกกัน
+## เริ่มตรงไหนดี
+
+อยากได้ v9 เดิมที่ไม่มีอะไรงอกออกมา แค่บั๊กหาย → [`docs/V9_FIXED.md`](docs/V9_FIXED.md)
+
+## สายอื่นที่แยกออกไป
 
 - **สาย v9 → v10** — 0.01 lot คงที่ TP1/TP2 realtime ตาราง MTF เหมือนเดิม
   เริ่มที่ [`docs/V10_GUIDE.md`](docs/V10_GUIDE.md)
