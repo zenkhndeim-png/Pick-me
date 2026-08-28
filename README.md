@@ -32,6 +32,14 @@ Pine Script indicator สำหรับเทรด XAUUSD ตามแนว�
 
 อยากได้ v9 เดิมที่ไม่มีอะไรงอกออกมา แค่บั๊กหาย → [`docs/V9_FIXED.md`](docs/V9_FIXED.md)
 
+## indicator ตัวอื่นที่ไม่เกี่ยวกับสาย SMC
+
+| ไฟล์ | คำอธิบาย |
+|---|---|
+| `src/XAUUSD_MultiTP_M15.pine` | **Multi-TP M15** — Supertrend + TP 5 ชั้นห่างเท่ากัน + ไม้เสริม |
+| `docs/MULTITP_M15.md` | คู่มือ + ที่มาของสูตร TP/SL |
+| `docs/CODE_MULTITP_M15.md` | โค้ดพร้อมปุ่มคัดลอก |
+
 ## สายอื่นที่แยกออกไป
 
 - **สาย v9 → v10** — 0.01 lot คงที่ TP1/TP2 realtime ตาราง MTF เหมือนเดิม
