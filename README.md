@@ -21,5 +21,15 @@ Pine Script indicator สำหรับเทรด XAUUSD ตามแนว�
 | `src/XAUUSD_SMC_Pro_v9_5_ICT.pine` | **v9.4 + ระบบเข้าไม้แบบ ICT** (sweep → MSS → FVG/OB → P/D → killzone) |
 | `docs/CODE_v9_5_ICT.md` | โค้ด v9.5 พร้อมปุ่มคัดลอก |
 | `docs/ICT_GUIDE.md` | คู่มือส่วน ICT + ค่าที่แนะนำ |
+| `src/XAUUSD_SMC_Pro_v10_ICT.pine` | **สายตรงจาก v9 — แก้บั๊ก 12 ข้อ + ICT** (แนะนำถ้ายึด v9 เป็นหลัก) |
+| `docs/CODE_v10_ICT.md` | โค้ด v10 พร้อมปุ่มคัดลอก |
+| `docs/V10_GUIDE.md` | คู่มือ v10 + ตารางบั๊กที่แก้ทั้งหมด |
 
-เริ่มที่ [`docs/REVIEW_v9.md`](docs/REVIEW_v9.md)
+## สองสายที่แยกกัน
+
+- **สาย v9 → v10** — 0.01 lot คงที่ TP1/TP2 realtime ตาราง MTF เหมือนเดิม
+  เริ่มที่ [`docs/V10_GUIDE.md`](docs/V10_GUIDE.md)
+- **สาย v9.2 → v9.5** — คิด lot จากขนาดทุน มีเบรกกันทุนไม่พอ ถือทีละไม้
+  เริ่มที่ [`docs/LIVE_GUIDE.md`](docs/LIVE_GUIDE.md)
+
+รายละเอียดบั๊กของต้นฉบับอยู่ที่ [`docs/REVIEW_v9.md`](docs/REVIEW_v9.md)
