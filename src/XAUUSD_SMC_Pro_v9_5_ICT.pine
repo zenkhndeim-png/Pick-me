@@ -693,6 +693,32 @@ if slNow
     label.new(bar_index, close, "SL", style=label.style_label_left, color=color.new(#FF1744, 20), textcolor=color.white, size=size.tiny)
 
 // ══════════════════════════════════════════
+// ทำไมถึงยังไม่ยิงสัญญาณ — ไล่หาตัวที่บล็อกอยู่จริง
+// เพิ่มเพราะอาการ "เปิดอินดี้แล้วไม่มีอะไรขึ้นเลย" แยกไม่ออกว่าเงื่อนไข
+// ยังไม่ครบ หรือโดน risk gate ตัดทิ้งตั้งแต่ต้น
+// ══════════════════════════════════════════
+// ทุนขั้นต่ำที่ต้องมี ถึงจะเข้าไม้ด้วย lot ขั้นต่ำของโบรกแล้วยังอยู่ในเพดานเสี่ยง
+refSLdist   = math.min(buySLdist, sellSLdist)
+minAcctNeed = riskPct > 0 ? refSLdist * ozPerLot * minLot / (riskPct / 100) : na
+affordAny   = buyAffordOK or sellAffordOK
+bestScore   = math.max(buyScore, sellScore)
+gapLeft     = signalGap - (bar_index - nz(lastSigBar, bar_index))
+
+TXT_READY = "เงื่อนไขครบ — รอแท่งปิด"
+blockTxt =
+     stState != 0        ? "กำลังถือไม้ (1 ไม้ต่อครั้ง)" :
+     not affordAny       ? "ทุนไม่พอ — ต้องมี ≥ $" + str.tostring(minAcctNeed, "#") :
+     not trending        ? "Sideway — ADX " + str.tostring(adxVal, "#.#") + " < " + str.tostring(adxMin, "#") :
+     modeICTonly and not inKZ ? "นอกเวลา Killzone" :
+     not canSignal       ? "เว้นระยะสัญญาณ อีก " + str.tostring(gapLeft) + " แท่ง" :
+     not (mtfBuyOK or mtfSellOK) ? "MTF สวนทาง (" + mtfConfirm + " = " + (confirmBias == 1 ? "UP" : confirmBias == -1 ? "DOWN" : "-") + ")" :
+     useSMCsig and bestScore < minScore ? "คะแนนได้ " + str.tostring(bestScore) + " / ต้องการ " + str.tostring(minScore) :
+     useSMCsig and not (bullTrigger or bearTrigger) ? "รอแท่งเทียน trigger" :
+     modeICTonly        ? "รอ sweep แล้ว MSS" :
+     TXT_READY
+blockCol = stState != 0 ? color.orange : not affordAny ? color.new(#FF1744, 0) : blockTxt == TXT_READY ? color.new(#00E676, 0) : color.gray
+
+// ══════════════════════════════════════════
 // ตารางสรุป
 // ══════════════════════════════════════════
 f_cell(_b) => _b == 1 ? "UP" : _b == -1 ? "DOWN" : "-"
@@ -707,7 +733,7 @@ pdCol   = na(pdPct) ? color.gray : pdPct > 55 ? sellColor : pdPct < 45 ? buyColo
 ictStTxt = bArm ? "กวาด SSL แล้ว รอ MSS (" + str.tostring(ictArmAge - (bar_index - bArmBar)) + ")" : sArm ? "กวาด BSL แล้ว รอ MSS (" + str.tostring(ictArmAge - (bar_index - sArmBar)) + ")" : "รอ liquidity sweep"
 ictStCol = bArm ? buyColor : sArm ? sellColor : color.gray
 
-var table t = table.new(position.top_right, 2, 15, bgcolor=color.new(#1a1a2e, 8), border_width=1, border_color=color.new(color.gray, 70))
+var table t = table.new(position.top_right, 2, 16, bgcolor=color.new(#1a1a2e, 8), border_width=1, border_color=color.new(color.gray, 70))
 if showPanel and barstate.islast
     table.cell(t, 0, 0, "SMC v9.5", text_color=color.white, text_size=size.tiny, bgcolor=color.new(#0f3460, 20))
     table.cell(t, 1, 0, "ICT", text_color=color.white, text_size=size.tiny, bgcolor=color.new(#0f3460, 20))
@@ -744,7 +770,7 @@ if showPanel and barstate.islast
     affordOK = math.min(buyLotIdeal, sellLotIdeal) >= minLot
     riskCol  = affordOK ? color.new(#00E676,0) : color.new(#FF1744,0)
     table.cell(t, 0, 9, "ถ้าเข้าตอนนี้ (SMC)", text_color=color.gray, text_size=size.tiny)
-    table.cell(t, 1, 9, affordOK ? "เสี่ยง " + str.tostring(nextRisk, "#.#") + "%" : "ทุนไม่พอ (" + str.tostring(nextRisk, "#.#") + "%)", text_color=riskCol, text_size=size.tiny)
+    table.cell(t, 1, 9, affordOK ? "เสี่ยง " + str.tostring(nextRisk, "#.#") + "%" : "เสี่ยง " + str.tostring(nextRisk, "#.#") + "% — ต้องมีทุน ≥ $" + str.tostring(minAcctNeed, "#"), text_color=riskCol, text_size=size.tiny)
 
     table.cell(t, 0, 10, "lot ที่ควรใช้", text_color=color.gray, text_size=size.tiny)
     table.cell(t, 1, 10, affordOK ? str.tostring(math.min(buyLotIdeal, sellLotIdeal), "#.###") : "ต่ำกว่า " + str.tostring(minLot, "#.###"), text_color=riskCol, text_size=size.tiny)
@@ -760,6 +786,9 @@ if showPanel and barstate.islast
 
     table.cell(t, 0, 14, "MTF repaint", text_color=color.gray, text_size=size.tiny)
     table.cell(t, 1, 14, noRepaint ? "กันแล้ว" : "⚠ ยังไม่กัน", text_color=noRepaint ? color.new(#00E676,0) : color.new(#FF1744,0), text_size=size.tiny)
+
+    table.cell(t, 0, 15, "ทำไมยังไม่ยิง", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 15, blockTxt, text_color=blockCol, text_size=size.tiny)
 
 // ══════════════════════════════════════════
 // ALERTS
