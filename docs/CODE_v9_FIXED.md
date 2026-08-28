@@ -15,12 +15,13 @@ v9 ต้นฉบับ แก้เฉพาะบั๊ก 11 จุด **ไ
 //
 // v9 ต้นฉบับ แก้เฉพาะบั๊ก — ไม่เพิ่มฟีเจอร์ ไม่เพิ่ม input สักช่อง
 // ทุกช่องตั้งค่า ทุกป้าย ทุกเส้น ตารางเดิม 10 แถว เหมือน v9 เป๊ะ
-// ค่า default เปลี่ยน 1 ช่อง (ยืนยันด้วย TF) และขยายช่วง Min Score 1 ช่อง
+// ค่า default ทุกช่องเท่าเดิมหมด สิ่งเดียวที่ขยับคือช่วงที่เลือกได้ของ Min Score
+// (5 → 7) ซึ่งเป็นตัวบั๊กเอง ไม่ได้เปลี่ยนค่าที่ตั้งมาให้
 //
 // รายการที่แก้ (ค้นหาคำว่า FIX ในไฟล์เพื่อดูจุดที่แก้)
 //   FIX 1  MTF repaint — lookahead_off ไม่ใช่ "ค่าที่ปิดแล้ว" ตามที่คอมเมนต์เดิมเขียน
 //   FIX 2  ขอ TF ที่ต่ำกว่า/เท่ากับกราฟ ได้ค่าที่ไม่น่าเชื่อถือ → ตัดออก แสดง n/a
-//   FIX 3  default "ยืนยันด้วย TF" = H1 บนกราฟ H1 → ฟิลเตอร์ตาย + นับคะแนนซ้ำ
+//   FIX 3  เลือก TF ยืนยันที่ไม่สูงกว่ากราฟ แล้วโค้ดแกล้งทำเป็นว่าค่ามาจาก TF อื่น
 //   FIX 4  RSI OB/OS เป็นค่าตาย ปรับแล้วไม่มีผลใด ๆ
 //   FIX 5  Volume filter เป็น false ตลอดถ้าฟีดไม่มี volume = เสียคะแนนฟรีทุกแท่ง
 //   FIX 6  Min Score เลือกได้แค่ถึง 5 ทั้งที่คะแนนเต็มคือ 7
@@ -47,7 +48,7 @@ swingLen    = input.int(5, "Swing Length", minval=2, maxval=20, group=grp_struct
 
 grp_mtf     = "Multi-Timeframe"
 useMTF      = input.bool(true, "เปิด MTF Filter", group=grp_mtf)
-mtfConfirm  = input.string("H4", "ยืนยันด้วย TF", options=["M15","M30","H1","H4"], group=grp_mtf, tooltip="FIX 3: ต้องสูงกว่า TF ของกราฟ ถ้าเลือกเท่ากับ/ต่ำกว่า ค่าที่ได้จะเท่ากับเทรนด์ของกราฟเองเป๊ะ ๆ = ฟิลเตอร์ไม่ได้กรองอะไร แถมนับคะแนนซ้ำกับ trendUp (เล่น H1 → เลือก H4)")
+mtfConfirm  = input.string("H1", "ยืนยันด้วย TF", options=["M15","M30","H1","H4"], group=grp_mtf, tooltip="ค่านี้เป็น default เดิมของ v9 — ไม่ได้เปลี่ยน\n\nรู้ไว้ว่า: ถ้าเลือก TF ที่เท่ากับหรือต่ำกว่ากราฟ (เช่นเล่น H1 แล้วเลือก H1) ค่าที่ได้จะเท่ากับเทรนด์ EMA ของกราฟเองเป๊ะ ๆ แปลว่าฟิลเตอร์ MTF ไม่ได้กรองอะไรเพิ่ม และแต้ม trendUp ในคะแนนก็ซ้ำกับมัน\n\nเลือก H4 = ฟิลเตอร์ทำงานจริง แต่จะเข้าได้ทางเดียวตามเทรนด์ H4 เท่านั้น (ช่วง H4 ขาขึ้นจะไม่มี Sell เลย) สัญญาณจะน้อยลงมาก — เลือกเองตามที่รับได้")
 
 grp_rt      = "Realtime Signal"
 useRT       = input.bool(true, "เปิด Realtime (early warning)", group=grp_rt)
@@ -418,6 +419,7 @@ type TradeViz
     bool  active
     bool  pending      // FIX 10: วาง limit แล้วยังไม่ติด
     int   barFilled
+    int   barMade      // แท่งที่เกิดสัญญาณ — ห้ามให้ limit ติดในแท่งเดียวกันนี้
 
 var TradeViz[] trades = array.new<TradeViz>()
 
@@ -432,7 +434,7 @@ if buySignal
     bLnTP1   = line.new(bar_index, finalBuyTP1, bar_index, finalBuyTP1, color=color.new(#00E676, 45), style=line.style_dashed, width=1)
     bLnSL    = line.new(bar_index, finalBuySL,  bar_index, finalBuySL,  color=color.new(#FF1744, 20), style=line.style_dashed, width=2)
     bLnEntry = line.new(bar_index, buyEntry,    bar_index, buyEntry,    color=color.new(#FFEB3B, 20), style=line.style_dotted, width=1)
-    array.push(trades, TradeViz.new(bLnTP2, bLnTP1, bLnSL, bLnEntry, finalBuyTP2, finalBuyTP1, finalBuySL, buyEntry, true, true, useLimit, useLimit ? int(na) : bar_index))
+    array.push(trades, TradeViz.new(bLnTP2, bLnTP1, bLnSL, bLnEntry, finalBuyTP2, finalBuyTP1, finalBuySL, buyEntry, true, true, useLimit, useLimit ? int(na) : bar_index, bar_index))
 
 if sellSignal
     hdr = useLimit ? "SELL LIMIT\nเข้า " + str.tostring(sellEntry, "#.##") : "SELL " + str.tostring(close, "#.##")
@@ -445,13 +447,15 @@ if sellSignal
     sLnTP1   = line.new(bar_index, finalSellTP1, bar_index, finalSellTP1, color=color.new(#FF1744, 45), style=line.style_dashed, width=1)
     sLnSL    = line.new(bar_index, finalSellSL,  bar_index, finalSellSL,  color=color.new(#00E676, 20), style=line.style_dashed, width=2)
     sLnEntry = line.new(bar_index, sellEntry,    bar_index, sellEntry,    color=color.new(#FFEB3B, 20), style=line.style_dotted, width=1)
-    array.push(trades, TradeViz.new(sLnTP2, sLnTP1, sLnSL, sLnEntry, finalSellTP2, finalSellTP1, finalSellSL, sellEntry, false, true, useLimit, useLimit ? int(na) : bar_index))
+    array.push(trades, TradeViz.new(sLnTP2, sLnTP1, sLnSL, sLnEntry, finalSellTP2, finalSellTP1, finalSellSL, sellEntry, false, true, useLimit, useLimit ? int(na) : bar_index, bar_index))
 
 // FIX 11 — array ไม้เดิม push เข้าอย่างเดียว ไม่เคยลบ 1 ไม้ = 4 เส้น
 //   ประมาณ 125 ไม้ก็ชน max_lines_count(500) TradingView จะลบเส้นเก่าทิ้งเอง
 //   แต่ array ยังถือ id เดิม → line.set_x2 ไม่มีผล เส้นค้างไม่ยืดตามกราฟ
-//   จึงต้องลบเส้นพร้อมกับเอาไม้ออกจาก array (60 ไม้ = 240 เส้น เหลือที่ให้ BOS/CHoCH)
-while array.size(trades) > 60
+//   จึงต้องลบเส้นพร้อมกับเอาไม้ออกจาก array
+//   ตั้ง 100 ไม้ = 400 เส้น ใกล้เคียงกับที่ v9 เดิมโชว์ได้จริง (ราว 125 ไม้)
+//   ก่อนจะโดน TradingView ลบทิ้งเอง เหลือที่ให้เส้น BOS/CHoCH อีก 100 เส้น
+while array.size(trades) > 100
     oldT = array.shift(trades)
     line.delete(oldT.lnTP2)
     line.delete(oldT.lnTP1)
@@ -473,7 +477,9 @@ if array.size(trades) > 0
             //   = เส้นบนกราฟบอกว่าไม้นี้ TP ทั้งที่ในบัญชีจริงออเดอร์ไม่เคยติด
             //   ตอนนี้ต้องแตะราคาเข้าก่อน ถึงเริ่มนับผล (ไม้ที่ไม่เคยติดจะค้าง pending
             //   และเส้นยืดต่อไปเรื่อย ๆ ซึ่งเห็นได้ชัดว่าออเดอร์ยังไม่ติด)
-            if tr.pending
+            // ต้องเป็นแท่งถัดไปเป็นต้นไป — แท่งที่เกิดสัญญาณ ราคายังไม่ทันปิด
+            // เราจึงยังวางออเดอร์ไม่ได้ การเอา low ของแท่งนั้นมานับว่าติดคือการโกงตัวเอง
+            if tr.pending and bar_index > tr.barMade
                 if tr.isBuy ? low <= tr.entry : high >= tr.entry
                     tr.pending := false
                     tr.barFilled := bar_index
