@@ -293,7 +293,9 @@ if showTrLbl and barstate.islast
 // ══════════════════════════════════════════
 // ตารางสรุป — ตอบคำถามว่าแต่ละชั้นโดนจริงกี่ครั้ง
 // ══════════════════════════════════════════
-var table t = table.new(position.top_right, 2, 10, bgcolor=color.new(#141823, 8), border_width=1, border_color=color.new(color.gray, 70))
+// 11 แถว: หัว 1 + สถานะ/ระยะขั้น/เทรนด์ 2 TF/จำนวนไม้ = 5 + สถิติ TP อีก 5 = 11
+// (เดิมประกาศ 10 แถว แต่ลูป TP เขียนถึงแถวที่ 10 → Row 10 is out of table bounds)
+var table t = table.new(position.top_right, 2, 11, bgcolor=color.new(#141823, 8), border_width=1, border_color=color.new(color.gray, 70))
 if showPanel and barstate.islast
     table.cell(t, 0, 0, "Multi-TP", text_color=color.white, text_size=size.tiny, bgcolor=color.new(#1E3A5F, 20))
     table.cell(t, 1, 0, timeframe.period, text_color=color.white, text_size=size.tiny, bgcolor=color.new(#1E3A5F, 20))
